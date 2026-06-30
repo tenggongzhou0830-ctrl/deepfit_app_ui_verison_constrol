@@ -1,0 +1,6 @@
+{
+  "name": "Elite Coach",
+  "description": "一款黑绿科技风的智能健身、音乐、饮食计划一体化应用，支持响应式布局、动态音乐播放器、训练计时器与饮食记录功能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
