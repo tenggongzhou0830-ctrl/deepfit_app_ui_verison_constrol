@@ -32,6 +32,8 @@ export interface Track {
   id: string;
   title: string;
   artist: string;
+  album?: string;
   coverUrl: string;
-  lyrics: string[];
+  lyrics: string[] | {time: number, text: string}[];
+  audioUrl?: string;
 }

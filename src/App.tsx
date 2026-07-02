@@ -21,7 +21,14 @@ export default function App() {
   const [exercises, setExercises] = useState<Exercise[]>(INITIAL_EXERCISES);
   const [meals, setMeals] = useState<Meal[]>(INITIAL_MEALS);
   const [tracks] = useState<Track[]>(INITIAL_TRACKS);
-  const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(() => {
+    return Number(localStorage.getItem("elite_coach_track_index")) || 0;
+  });
+  
+  const updateTrackIndex = (idx: number) => {
+    setCurrentTrackIndex(idx);
+    localStorage.setItem("elite_coach_track_index", idx.toString());
+  };
 
   // User ID Customization state
   const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=150&q=80";
@@ -86,7 +93,7 @@ export default function App() {
               sports_gymnastics
             </span>
             <span className="font-display font-black text-xl text-brand-lime tracking-wider uppercase group-hover:opacity-80 transition-opacity">
-              ELITE COACH
+              ICE COACH
             </span>
             <span className="hidden sm:inline-block text-[10px] bg-brand-lime/10 border border-brand-lime/25 text-brand-lime font-mono font-bold px-2 py-0.5 rounded ml-1">
               PRO v2.0
@@ -222,53 +229,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Presets Choice */}
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[9px] text-brand-text-dark font-black uppercase tracking-wider">
-                        选择预设推荐
-                      </span>
-                      <div className="flex gap-2 justify-between">
-                        {[
-                          "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?auto=format&fit=crop&w=150&q=80",
-                          "https://images.unsplash.com/photo-1517838277536-f5f99be501cd?auto=format&fit=crop&w=150&q=80",
-                          "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80",
-                          "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=150&q=80",
-                          "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80"
-                        ].map((url, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => {
-                              setTempAvatar(url);
-                              setAvatarError(null);
-                            }}
-                            className={`w-8 h-8 rounded-full overflow-hidden border-2 transition-all cursor-pointer ${
-                              tempAvatar === url ? "border-brand-lime scale-110 shadow-[0_0_8px_rgba(195,244,0,0.5)]" : "border-transparent opacity-60 hover:opacity-100"
-                            }`}
-                          >
-                            <img src={url} className="w-full h-full object-cover" alt={`preset-${i}`} />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
 
-                    {/* Custom URL Input optionally */}
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[9px] text-brand-text-dark font-black uppercase tracking-wider">
-                        或输入外部图片链接
-                      </span>
-                      <input
-                        type="url"
-                        value={tempAvatar.startsWith("data:") ? "" : tempAvatar}
-                        onChange={(e) => {
-                          if (e.target.value.trim()) {
-                            setTempAvatar(e.target.value);
-                          }
-                        }}
-                        className="w-full bg-brand-black/60 hover:bg-brand-black/80 focus:bg-brand-black border border-white/5 focus:border-brand-lime/40 rounded-xl py-1.5 px-3 text-[10px] text-brand-text outline-none transition-all"
-                        placeholder="http://..."
-                      />
-                    </div>
 
                     <div className="flex flex-col gap-2">
                       <span className="text-[9px] text-brand-text-dark font-black uppercase tracking-wider">
@@ -342,19 +303,23 @@ export default function App() {
             />
           )}
 
-          {activeTab === "music" && (
-            <MusicView
-              key="music"
-              tracks={tracks}
-              currentTrackIndex={currentTrackIndex}
-              setCurrentTrackIndex={setCurrentTrackIndex}
-            />
-          )}
-
           {activeTab === "diet" && (
             <DietView key="diet" meals={meals} setMeals={setMeals} />
           )}
         </AnimatePresence>
+
+        {/* Global Persistent Music Player */}
+        <MusicView
+          key="music"
+          tracks={tracks}
+          currentTrackIndex={currentTrackIndex}
+          setCurrentTrackIndex={updateTrackIndex}
+          isActive={activeTab === "music"}
+          onNavigate={() => {
+            setActiveTab("music");
+            setIsTraining(false);
+          }}
+        />
       </main>
 
       {/* =========================================

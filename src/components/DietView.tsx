@@ -19,10 +19,10 @@ export default function DietView({ meals, setMeals }: DietViewProps) {
   // Food logging modal state
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
   const [foodName, setFoodName] = useState("");
-  const [foodCalories, setFoodCalories] = useState<number | "">(300);
-  const [foodProtein, setFoodProtein] = useState<number | "">(20);
-  const [foodCarbs, setFoodCarbs] = useState<number | "">(35);
-  const [foodFat, setFoodFat] = useState<number | "">(8);
+  const [foodCalories, setFoodCalories] = useState<number | "">("");
+  const [foodProtein, setFoodProtein] = useState<number | "">("");
+  const [foodCarbs, setFoodCarbs] = useState<number | "">("");
+  const [foodFat, setFoodFat] = useState<number | "">("");
   const [foodType, setFoodType] = useState("加餐");
   const [foodIngredients, setFoodIngredients] = useState("");
 
@@ -79,9 +79,45 @@ export default function DietView({ meals, setMeals }: DietViewProps) {
     reader.onload = (e) => {
       const imgUrl = e.target?.result as string;
       setUploadedImage(imgUrl);
-      triggerScanning(imgUrl, "智能相机识别健康餐", "西兰花、糙米饭、高蛋白肉类配比", 450, 26, 45, 12);
+      analyzeFoodWithAI(imgUrl);
     };
     reader.readAsDataURL(file);
+  };
+
+  const analyzeFoodWithAI = async (imgUrl: string) => {
+    setIsScanning(true);
+    setScanStage("🔍 正在将图像发送至 AI 视觉核心...");
+    
+    try {
+      setScanStage("🥑 Gemini 1.5 Flash 视觉引擎正在极速分析成分...");
+      const response = await fetch("/api/v1/diet/analyze-food", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: imgUrl }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || "AI Analysis Failed");
+      }
+      
+      setScanStage("✅ AI 分析成功！已提取精准卡路里与宏量营养素");
+      
+      const aiData = data.data;
+      setFoodName(aiData.name || "AI 智能识别餐");
+      setFoodIngredients(aiData.ingredients || "");
+      setFoodCalories(aiData.calories || 0);
+      setFoodProtein(aiData.protein || 0);
+      setFoodCarbs(aiData.carbs || 0);
+      setFoodFat(aiData.fat || 0);
+      
+    } catch (error: any) {
+      console.error("AI 识别错误:", error);
+      setScanStage("❌ AI 识别失败: " + error.message);
+    } finally {
+      setTimeout(() => setIsScanning(false), 2000);
+    }
   };
 
   const triggerScanning = (
@@ -150,13 +186,14 @@ export default function DietView({ meals, setMeals }: DietViewProps) {
   );
 
   const handleAddCustomFood = () => {
-    if (!foodName.trim()) return;
+    const finalFoodName = foodName.trim() || `自定义${foodType}`;
+    
     const newMeal: Meal = {
       id: "food-" + Date.now(),
       timeText: "现在",
       type: foodType,
-      name: foodName,
-      ingredients: foodIngredients || `自定义记录的${foodType}`,
+      name: finalFoodName,
+      ingredients: foodIngredients || "手动记录的各项宏量营养",
       calories: Number(foodCalories) || 0,
       protein: Number(foodProtein) || 0,
       carbs: Number(foodCarbs) || 0,
@@ -561,7 +598,7 @@ export default function DietView({ meals, setMeals }: DietViewProps) {
                 <div>
                   <h3 className="text-sm font-sans font-black text-brand-lime tracking-wider uppercase flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-base animate-pulse">camera</span>
-                    AI 拍照 & 智能图像提取
+                    拍照识别营养成分
                   </h3>
                   <p className="text-brand-text-muted text-xs mt-1">
                     点击相机上传美食照片，即可一键重构每餐热量。
@@ -569,7 +606,7 @@ export default function DietView({ meals, setMeals }: DietViewProps) {
                 </div>
 
                 {/* Main Camera / Scanning Board */}
-                <div className="relative border-2 border-dashed border-white/10 hover:border-brand-lime/40 rounded-xl p-4 h-48 bg-brand-black/40 flex flex-col items-center justify-center gap-2 overflow-hidden group transition-all">
+                <div className="relative border-2 border-dashed border-white/10 hover:border-brand-lime/40 rounded-xl p-4 flex-1 min-h-[300px] bg-brand-black/40 flex flex-col items-center justify-center gap-2 overflow-hidden group transition-all">
                   {uploadedImage ? (
                     <div className="absolute inset-0">
                       <img
@@ -597,6 +634,8 @@ export default function DietView({ meals, setMeals }: DietViewProps) {
                   <input
                     type="file"
                     accept="image/*"
+                    capture="environment"
+                    onClick={(e) => { (e.target as HTMLInputElement).value = '' }}
                     onChange={(e) => {
                       if (e.target.files && e.target.files[0]) {
                         handleImageUpload(e.target.files[0]);
@@ -634,48 +673,7 @@ export default function DietView({ meals, setMeals }: DietViewProps) {
                   )}
                 </div>
 
-                {/* Quick actions: Test Samples */}
-                <div className="flex flex-col gap-2">
-                  <span className="text-[10px] font-sans font-bold text-brand-text-dark uppercase tracking-widest">
-                    ⚡ 快速测试样例 (点击即可模拟 AI 扫描)
-                  </span>
-                  <div className="grid grid-cols-2 gap-2">
-                    {SAMPLES.map((sample) => (
-                      <button
-                        key={sample.name}
-                        type="button"
-                        onClick={() =>
-                          triggerScanning(
-                            sample.imageUrl,
-                            sample.name,
-                            sample.ingredients,
-                            sample.calories,
-                            sample.protein,
-                            sample.carbs,
-                            sample.fat
-                          )
-                        }
-                        className="flex items-center gap-2 p-1.5 bg-brand-black/30 hover:bg-brand-black/50 border border-white/5 hover:border-white/10 rounded-lg text-left transition-all group cursor-pointer"
-                      >
-                        <div className="w-8 h-8 rounded overflow-hidden flex-shrink-0 relative border border-white/5">
-                          <img
-                            src={sample.imageUrl}
-                            alt={sample.name}
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[10px] font-sans font-bold text-brand-text truncate group-hover:text-brand-lime transition-colors">
-                            {sample.name}
-                          </p>
-                          <p className="text-[9px] font-mono text-brand-lime">
-                            {sample.calories} kcal • {sample.protein}g 蛋
-                          </p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+
               </div>
 
               {/* Right Column: Calories & Nutritional Macro Customizer */}

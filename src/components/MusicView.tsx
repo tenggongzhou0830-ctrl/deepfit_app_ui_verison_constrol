@@ -1,27 +1,178 @@
 import { useState, useEffect, useRef, MouseEvent } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Track } from "../types";
+import { searchMusic as fetchSearchMusic, mapSongToTrack, getLoginQrKey, createLoginQrImage, checkLoginQrStatus, getNeteaseCookie } from "../lib/netease";
 
 interface MusicViewProps {
   key?: string;
   tracks: Track[];
   currentTrackIndex: number;
   setCurrentTrackIndex: (idx: number) => void;
+  isActive?: boolean;
+  onNavigate?: () => void;
 }
 
 export default function MusicView({
   tracks,
   currentTrackIndex,
   setCurrentTrackIndex,
+  isActive = true,
+  onNavigate,
 }: MusicViewProps) {
-  const currentTrack = tracks[currentTrackIndex];
 
   const [isPlaying, setIsPlaying] = useState(true);
-  const [currentTime, setCurrentTime] = useState(84); // 1:24
-  const [trackDuration] = useState(225); // 3:45
+  const [currentTime, setCurrentTime] = useState(84);
+  const [trackDuration, setTrackDuration] = useState(225);
   const [isFavorite, setIsFavorite] = useState(false);
   const [isListOpen, setIsListOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [activeTracks, setActiveTracks] = useState<Track[]>(() => {
+    try {
+      const saved = localStorage.getItem("elite_coach_tracks");
+      if (saved) return JSON.parse(saved);
+    } catch(e){}
+    return tracks;
+  });
+  
+  useEffect(() => {
+    localStorage.setItem("elite_coach_tracks", JSON.stringify(activeTracks));
+  }, [activeTracks]);
+
+  const currentTrack = activeTracks[currentTrackIndex] || activeTracks[0];
+
+  // NetEase Connection States
+  const [neteaseConnected, setNeteaseConnected] = useState<boolean>(false);
+  const [isConnectOpen, setIsConnectOpen] = useState<boolean>(false);
+  const [isLoginOpen, setIsLoginOpen] = useState<boolean>(false);
+  const [qrImage, setQrImage] = useState<string | null>(null);
+  const [qrStatus, setQrStatus] = useState<string>("加载中...");
+  const [qrUnikey, setQrUnikey] = useState<string | null>(null);
+  const qrCheckTimer = useRef<NodeJS.Timeout | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState("");
+
+
+
+  useEffect(() => {
+    if (getNeteaseCookie()) {
+      setNeteaseConnected(true);
+    }
+  }, []);
+
+  const openLoginModal = async () => {
+    setIsLoginOpen(true);
+    try {
+      const key = await getLoginQrKey();
+      setQrUnikey(key);
+      const img = await createLoginQrImage(key);
+      setQrImage(img);
+      setQrStatus("请使用网易云音乐 App 扫码");
+    } catch (e) {
+      setQrStatus("二维码生成失败，请检查 3001 端口");
+    }
+  };
+
+  useEffect(() => {
+    if (!qrUnikey || !isLoginOpen) return;
+    qrCheckTimer.current = setInterval(async () => {
+      try {
+        const res = await checkLoginQrStatus(qrUnikey);
+        if (res.code === 800) {
+          setQrStatus("二维码已过期，请重新打开弹窗");
+          clearInterval(qrCheckTimer.current!);
+        } else if (res.code === 802) {
+          setQrStatus("扫描成功，请在手机上确认登录");
+        } else if (res.code === 803) {
+          setQrStatus("登录成功！");
+          localStorage.setItem("netease_cookie", res.cookie);
+          setNeteaseConnected(true);
+          clearInterval(qrCheckTimer.current!);
+          setTimeout(() => setIsLoginOpen(false), 1500);
+        }
+      } catch (e) {
+        console.error("QR Check error:", e);
+      }
+    }, 2500);
+
+    return () => {
+      if (qrCheckTimer.current) clearInterval(qrCheckTimer.current);
+    };
+  }, [qrUnikey, isLoginOpen]);
+
+  const searchMusic = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearching(true);
+    try {
+      const results = await fetchSearchMusic(searchQuery);
+      setSearchResults(results);
+    } catch (e) {
+      setToastMessage("搜索失败，请确保后台 API 服务已启动");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const playNeteaseSong = async (song: any) => {
+    setLoadingMsg("正在解析并提取无损音源 (可能需要几秒钟)...");
+    try {
+      const newTrack = await mapSongToTrack(song);
+      if (!newTrack.audioUrl) {
+        setToastMessage("获取音频失败 (可能需要 VIP)");
+        setLoadingMsg("");
+        return;
+      }
+      setActiveTracks([newTrack]);
+      setCurrentTrackIndex(0);
+      setNeteaseConnected(true);
+      setIsConnectOpen(false);
+      setCurrentTime(0);
+      setIsPlaying(true);
+      setToastMessage(`正在播放: ${newTrack.title}`);
+    } catch (e) {
+      setToastMessage("解析失败");
+    } finally {
+      setLoadingMsg("");
+    }
+  };
+
+  const loadRecommendedPlaylist = async (id: string) => {
+    setLoadingMsg("正在加载全球热歌推荐...");
+    try {
+      const songs = await fetchSearchMusic("global hot hits 2024");
+      if (songs.length === 0) throw new Error("empty");
+      
+      // Load only first 3 to save time for yt-dlp extraction
+      const mapped = await Promise.all(songs.slice(0, 3).map((s:any) => mapSongToTrack(s)));
+      const validTracks = mapped.filter(t => t.audioUrl);
+      
+      if (validTracks.length > 0) {
+        setActiveTracks(validTracks);
+        setCurrentTrackIndex(0);
+        setNeteaseConnected(true);
+        setIsConnectOpen(false);
+        setCurrentTime(0);
+        setIsPlaying(true);
+        setToastMessage(`成功加载了 ${validTracks.length} 首全球热歌！`);
+      } else {
+        setToastMessage("没有获取到可用音频");
+      }
+    } catch(e) {
+      setToastMessage("加载失败");
+    } finally {
+      setLoadingMsg("");
+    }
+  };
+
+  const handleDisconnectNetease = () => {
+    setNeteaseConnected(false);
+    setActiveTracks(tracks);
+    setCurrentTrackIndex(0);
+    setCurrentTime(0);
+    setToastMessage("已断开连接，切回内置伴练模式");
+  };
 
   // Playback Modes: 'list' (列表循环), 'single' (单曲循环), 'shuffle' (随机播放)
   type PlayMode = "list" | "single" | "shuffle";
@@ -54,14 +205,14 @@ export default function MusicView({
   const handlePrev = () => {
     setCurrentTime(0);
     if (playMode === "shuffle") {
-      let rand = Math.floor(Math.random() * tracks.length);
+      let rand = Math.floor(Math.random() * activeTracks.length);
       // Try to avoid repeating same track if there's multiple
-      if (tracks.length > 1 && rand === currentTrackIndex) {
-        rand = (rand + 1) % tracks.length;
+      if (activeTracks.length > 1 && rand === currentTrackIndex) {
+        rand = (rand + 1) % activeTracks.length;
       }
       setCurrentTrackIndex(rand);
     } else {
-      const prevIdx = (currentTrackIndex - 1 + tracks.length) % tracks.length;
+      const prevIdx = (currentTrackIndex - 1 + activeTracks.length) % activeTracks.length;
       setCurrentTrackIndex(prevIdx);
     }
   };
@@ -70,13 +221,13 @@ export default function MusicView({
   const handleNext = () => {
     setCurrentTime(0);
     if (playMode === "shuffle") {
-      let rand = Math.floor(Math.random() * tracks.length);
-      if (tracks.length > 1 && rand === currentTrackIndex) {
-        rand = (rand + 1) % tracks.length;
+      let rand = Math.floor(Math.random() * activeTracks.length);
+      if (activeTracks.length > 1 && rand === currentTrackIndex) {
+        rand = (rand + 1) % activeTracks.length;
       }
       setCurrentTrackIndex(rand);
     } else {
-      const nextIdx = (currentTrackIndex + 1) % tracks.length;
+      const nextIdx = (currentTrackIndex + 1) % activeTracks.length;
       setCurrentTrackIndex(nextIdx);
     }
   };
@@ -122,43 +273,79 @@ export default function MusicView({
     }
   };
 
-  // Time progress timer hook
+  // Time progress timer hook & Audio sync
+  useEffect(() => {
+    if (audioRef.current) {
+      if (isPlaying) {
+        audioRef.current.play().catch(e => console.log("Audio play failed:", e));
+      } else {
+        audioRef.current.pause();
+      }
+      audioRef.current.muted = isMuted;
+    }
+  }, [isPlaying, isMuted, currentTrackIndex, activeTracks]);
+
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
     if (isPlaying) {
       interval = setInterval(() => {
-        setCurrentTime((prev) => {
-          if (prev >= trackDuration) {
-            if (playMode === "single") {
-              return 0; // loop single
+        // Only run mock progress if there's no actual audio playing
+        if (!audioRef.current || !activeTracks[currentTrackIndex]?.audioUrl) {
+           setCurrentTime((prev) => {
+            if (prev >= trackDuration) {
+              if (playMode === "single") return 0;
+              handleNext();
+              return 0;
             }
-            // Otherwise, next track
-            handleNext();
-            return 0;
-          }
-          return prev + 1;
-        });
+            return prev + 1;
+          });
+        }
       }, 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isPlaying, playMode, currentTrackIndex]);
+  }, [isPlaying, playMode, currentTrackIndex, trackDuration, activeTracks]);
 
   // Format seconds to MM:SS
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
   // Calculate lyric highlighting
-  const lyricsCount = currentTrack.lyrics.length;
-  const lyricSegment = Math.floor(trackDuration / lyricsCount);
-  const currentLyricIdx = Math.min(
-    Math.floor(currentTime / lyricSegment),
-    lyricsCount - 1
-  );
+  let currentLyricIdx = 0;
+  let renderLyrics: {time: number; text: string}[] = [];
+  
+  if (currentTrack?.lyrics) {
+    if (typeof currentTrack.lyrics[0] === 'string') {
+       // Fallback for mock lyrics
+       const l = currentTrack.lyrics as string[];
+       const segment = Math.floor(trackDuration / Math.max(l.length, 1));
+       currentLyricIdx = Math.min(Math.floor(currentTime / Math.max(segment, 1)), l.length - 1);
+       renderLyrics = l.map((text, i) => ({ time: i * segment, text }));
+    } else {
+       // Proper synchronized lyrics from YT
+       renderLyrics = currentTrack.lyrics as {time: number; text: string}[];
+       currentLyricIdx = renderLyrics.findIndex(l => l.time > currentTime) - 1;
+       if (currentLyricIdx < 0) currentLyricIdx = 0;
+    }
+  }
+
+  const lyricRefs = useRef<(HTMLParagraphElement | null)[]>([]);
+  const [lyricScrollY, setLyricScrollY] = useState(48);
+
+  useEffect(() => {
+    if (lyricRefs.current[currentLyricIdx]) {
+      const activeEl = lyricRefs.current[currentLyricIdx];
+      if (activeEl) {
+        const containerHeight = isDesktop ? 256 : 144;
+        const centerOffset = (containerHeight / 2) - (activeEl.offsetHeight / 2);
+        setLyricScrollY(centerOffset - activeEl.offsetTop);
+      }
+    }
+  }, [currentLyricIdx, isDesktop]);
 
   // Seek bar click handler
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -168,18 +355,76 @@ export default function MusicView({
     const clickX = e.clientX - rect.left;
     const width = rect.width;
     const pct = Math.max(0, Math.min(clickX / width, 1));
-    setCurrentTime(Math.floor(pct * trackDuration));
+    const newTime = Math.floor(pct * trackDuration);
+    setCurrentTime(newTime);
+    if (audioRef.current && activeTracks[currentTrackIndex]?.audioUrl) {
+      audioRef.current.currentTime = newTime;
+    }
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.98 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.98 }}
-      transition={{ duration: 0.3 }}
-      className="relative w-full max-w-lg md:max-w-4xl mx-auto bg-brand-black/25 backdrop-blur-md rounded-3xl border border-white/10 p-6 md:p-8 overflow-hidden flex flex-col min-h-[580px] md:min-h-[520px] shadow-2xl"
-    >
-      {/* Ins-style Elegant Toast Alert */}
+    <>
+      {/* --- MINI PLAYER (Floating at bottom-right) --- */}
+      <AnimatePresence>
+        {!isActive && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.9 }}
+            onClick={onNavigate}
+            className="fixed bottom-24 right-4 md:right-12 z-50 bg-[#0e0e0ee6] backdrop-blur-2xl border border-white/15 rounded-2xl p-3 flex items-center gap-3 w-64 shadow-[0_10px_40px_rgba(0,0,0,0.8)] cursor-pointer hover:border-brand-lime/40 transition-colors group"
+          >
+            {/* Spinning mini disk */}
+            <div className={`w-10 h-10 rounded-full border border-white/20 overflow-hidden shrink-0 ${isPlaying ? 'animate-[spin_4s_linear_infinite]' : ''}`}>
+              <img src={currentTrack?.coverUrl} className="w-full h-full object-cover" alt="cover" />
+            </div>
+            
+            {/* Meta */}
+            <div className="flex flex-col overflow-hidden flex-grow">
+              <span className="text-[11px] font-black text-brand-text truncate group-hover:text-brand-lime transition-colors">
+                {currentTrack?.title || "未播放"}
+              </span>
+              <span className="text-[9px] text-brand-text-muted truncate">
+                {currentTrack?.artist}
+              </span>
+            </div>
+
+            {/* Play/Pause Control */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsPlaying(!isPlaying);
+              }}
+              className="w-8 h-8 rounded-full bg-brand-lime text-brand-black flex items-center justify-center shrink-0 hover:scale-105 active:scale-95 transition-all shadow-[0_0_10px_rgba(195,244,0,0.3)]"
+            >
+              <span className="material-symbols-outlined text-[16px]">
+                {isPlaying ? "pause" : "play_arrow"}
+              </span>
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* --- FULL PLAYER UI --- */}
+      <div className={isActive ? "w-full h-full" : "hidden"}>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.98 }}
+          transition={{ duration: 0.3 }}
+          className="relative w-full max-w-lg md:max-w-4xl mx-auto bg-brand-black/25 backdrop-blur-md rounded-3xl border border-white/10 p-6 md:p-8 overflow-hidden flex flex-col min-h-[580px] md:min-h-[520px] shadow-2xl"
+        >
+          {/* Native Audio Element */}
+          {currentTrack?.audioUrl && (
+             <audio 
+               ref={audioRef} 
+               src={currentTrack.audioUrl}
+               onEnded={handleNext}
+               onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+               onLoadedMetadata={() => setTrackDuration(Math.floor(audioRef.current?.duration || 1))}
+             />
+          )}
+          {/* Ins-style Elegant Toast Alert */}
       <AnimatePresence>
         {toastMessage && (
           <motion.div
@@ -217,11 +462,42 @@ export default function MusicView({
 
         <div className="flex flex-col items-center">
           <span className="text-[9px] text-brand-text-dark uppercase tracking-widest font-mono font-black">
-            NETEASE MUSIC PLAYER
+            {neteaseConnected ? "NETEASE CLOUD MUSIC" : "GLOBAL MUSIC ENGINE"}
           </span>
-          <span className="text-xs font-black text-brand-lime font-display tracking-wider">
-            网易云音乐 伴练模式
-          </span>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-xs font-black text-brand-lime font-display tracking-wider">
+              {neteaseConnected ? "已登录网易云" : "未登录，普通模式"}
+            </span>
+            {!neteaseConnected && (
+              <button
+                onClick={openLoginModal}
+                className="px-2 py-0.5 rounded bg-brand-lime/20 hover:bg-brand-lime/30 text-[10px] text-brand-lime font-bold transition-all border border-brand-lime/50 cursor-pointer"
+              >
+                扫码登录
+              </button>
+            )}
+            <button
+              onClick={() => {
+                 setSearchQuery("");
+                 setIsConnectOpen(true);
+              }}
+              className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-[10px] text-white font-bold transition-all cursor-pointer"
+            >
+              搜索歌曲
+            </button>
+            {neteaseConnected && (
+              <button
+                onClick={() => {
+                  localStorage.removeItem("netease_cookie");
+                  setNeteaseConnected(false);
+                  setToastMessage("已退出登录");
+                }}
+                className="px-2 py-0.5 rounded bg-red-500/20 hover:bg-red-500/30 text-[10px] text-red-500 font-bold transition-all border border-red-500/50 cursor-pointer"
+              >
+                退出
+              </button>
+            )}
+          </div>
         </div>
 
         <button
@@ -237,6 +513,7 @@ export default function MusicView({
         </button>
       </div>
 
+      {/* Responsive Main Section: CD on Left, Lyrics on Right for Desktop */}
       {/* Responsive Main Section: CD on Left, Lyrics on Right for Desktop */}
       <div className="flex-1 flex flex-col md:grid md:grid-cols-12 md:gap-8 items-center md:items-stretch mb-6 relative z-10 w-full">
         
@@ -367,7 +644,7 @@ export default function MusicView({
             <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-3 gap-y-1 mt-1 text-xs text-brand-text-muted font-bold">
               <span>歌手：<span className="text-brand-cyan hover:underline cursor-pointer">{currentTrack.artist}</span></span>
               <span className="text-white/10">•</span>
-              <span>专辑：<span className="text-brand-text-dark hover:underline cursor-pointer">极限界速特训合辑</span></span>
+              <span>专辑：<span className="text-brand-text-dark hover:underline cursor-pointer">{currentTrack.album || "极限界速特训合辑"}</span></span>
             </div>
           </div>
 
@@ -378,35 +655,38 @@ export default function MusicView({
             <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-[#0e0e0e]/95 via-[#0e0e0e]/40 to-transparent pointer-events-none z-10"></div>
 
             <motion.div
-              animate={{ y: (isDesktop ? 110 : 48) - currentLyricIdx * 42 }}
+              animate={{ y: lyricScrollY }}
               transition={{ type: "spring", stiffness: 100, damping: 20, mass: 0.8 }}
-              className="text-center flex flex-col items-center"
+              className="text-center flex flex-col items-center w-full"
             >
-              {currentTrack.lyrics.map((lyric, idx) => {
+              {renderLyrics.map((lyricObj, idx) => {
                 const isActive = idx === currentLyricIdx;
+                
                 return (
-                  <motion.p
-                    key={lyric + idx}
-                    animate={{
-                      scale: isActive ? 1.35 : 0.85,
-                      opacity: isActive ? 1 : 0.35,
-                    }}
-                    transition={{ duration: 0.35, ease: "easeOut" }}
-                    className={`transition-all duration-300 font-sans text-xs md:text-sm ${
+                  <p
+                    key={idx + lyricObj.text}
+                    ref={el => { lyricRefs.current[idx] = el; }}
+                    className={`transition-all duration-300 font-sans text-xs md:text-sm w-full px-2 ${
                       isActive
                         ? "text-brand-lime font-black drop-shadow-[0_0_10px_rgba(195,244,0,0.5)]"
                         : "text-brand-text-muted/65 font-medium"
                     }`}
                     style={{
-                      height: "42px",
+                      padding: "8px 0",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      whiteSpace: "nowrap",
+                      whiteSpace: "normal",
+                      wordBreak: "break-word",
+                      transform: isActive ? "scale(1.2)" : "scale(0.85)",
+                      opacity: isActive ? 1 : 0.35,
+                      transformOrigin: "center center"
                     }}
                   >
-                    {lyric}
-                  </motion.p>
+                    <span className={isActive ? "tracking-in-expand-fwd inline-block" : ""}>
+                      {lyricObj.text}
+                    </span>
+                  </p>
                 );
               })}
             </motion.div>
@@ -615,7 +895,7 @@ export default function MusicView({
               </div>
 
               <div className="space-y-1">
-                {tracks.map((track, idx) => {
+                {activeTracks.map((track, idx) => {
                   const isActive = idx === currentTrackIndex;
                   return (
                     <button
@@ -658,7 +938,143 @@ export default function MusicView({
           </div>
         )}
       </AnimatePresence>
-    </motion.div>
+
+      {/* QR Login Modal */}
+      <AnimatePresence>
+        {isLoginOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsLoginOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative bg-[#141414] border border-white/10 p-6 rounded-3xl w-full max-w-sm shadow-2xl flex flex-col items-center gap-4"
+            >
+              <div className="flex justify-between items-center w-full mb-2">
+                 <h3 className="text-lg font-black text-brand-lime font-display flex items-center gap-2">
+                   <span className="material-symbols-outlined text-xl">qr_code_scanner</span>
+                   网易云音乐 登录
+                 </h3>
+                 <button onClick={() => setIsLoginOpen(false)} className="text-neutral-500 hover:text-white transition-colors cursor-pointer">
+                    <span className="material-symbols-outlined">close</span>
+                 </button>
+              </div>
+              
+              <div className="bg-white p-2 rounded-xl">
+                {qrImage ? (
+                  <img src={qrImage} alt="QR Code" className="w-48 h-48 rounded-lg" />
+                ) : (
+                  <div className="w-48 h-48 bg-neutral-100 flex items-center justify-center rounded-lg animate-pulse">
+                    <span className="text-neutral-400 font-bold">加载中...</span>
+                  </div>
+                )}
+              </div>
+              
+              <div className="text-sm font-bold text-brand-text-muted mt-2">
+                {qrStatus}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* NetEase Connection Modal */}
+      <AnimatePresence>
+        {isConnectOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsConnectOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative bg-[#141414] border border-white/10 p-6 rounded-3xl w-full max-w-lg shadow-2xl flex flex-col gap-4 max-h-[80vh]"
+            >
+              <div className="flex justify-between items-center mb-1">
+                 <h3 className="text-xl font-black text-brand-lime font-display flex items-center gap-2">
+                   <span className="material-symbols-outlined text-2xl">music_note</span>
+                   全球全网音乐 发现
+                 </h3>
+                 <button onClick={() => setIsConnectOpen(false)} className="text-neutral-500 hover:text-white transition-colors cursor-pointer">
+                    <span className="material-symbols-outlined">close</span>
+                 </button>
+              </div>
+              
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && searchMusic()}
+                  placeholder="搜索歌曲 / 歌手..."
+                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:border-brand-lime focus:ring-1 focus:ring-brand-lime outline-none transition-all placeholder:text-neutral-600"
+                  autoFocus
+                />
+                <button
+                  onClick={searchMusic}
+                  disabled={isSearching}
+                  className="px-6 rounded-xl bg-brand-lime text-brand-black font-black hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 cursor-pointer flex items-center"
+                >
+                  {isSearching ? <span className="material-symbols-outlined animate-spin">refresh</span> : "搜索"}
+                </button>
+              </div>
+
+              {loadingMsg && (
+                <div className="text-center py-4 text-brand-lime text-xs font-bold animate-pulse">
+                  {loadingMsg}
+                </div>
+              )}
+
+              <div className="flex-1 overflow-y-auto mt-2 space-y-1 pr-1 custom-scrollbar">
+                {searchResults.length === 0 && !isSearching && !loadingMsg && (
+                  <div className="text-center py-10 flex flex-col items-center gap-4">
+                     <p className="text-neutral-500 text-sm">暂无搜索结果，或者试试我们的推荐歌单？</p>
+                     <button onClick={() => loadRecommendedPlaylist("3778678")} className="px-5 py-2.5 rounded-full border border-brand-lime/30 text-brand-lime hover:bg-brand-lime/10 transition-colors text-xs font-bold flex items-center gap-2 cursor-pointer shadow-[0_0_15px_rgba(195,244,0,0.1)]">
+                       <span className="material-symbols-outlined text-base">whatshot</span>
+                       一键提取全球热歌 (超长VIP无限制)
+                     </button>
+                  </div>
+                )}
+                
+                {searchResults.map((song: any) => (
+                  <button
+                    key={song.id}
+                    onClick={() => playNeteaseSong(song)}
+                    className="w-full flex items-center justify-between p-3 rounded-lg text-left transition-all hover:bg-white/5 border border-transparent hover:border-white/10 cursor-pointer group"
+                  >
+                    <div className="flex flex-col overflow-hidden">
+                      <p className="text-sm font-bold text-neutral-200 truncate group-hover:text-brand-lime transition-colors">
+                        {song.isNetease ? <span className="text-[9px] bg-red-500/20 text-red-500 px-1 rounded mr-2 align-middle">网易云</span> : <span className="text-[9px] bg-red-600/20 text-red-600 px-1 rounded mr-2 align-middle">YouTube</span>}
+                        {song.title || song.name}
+                      </p>
+                      <p className="text-[10px] text-neutral-500 mt-0.5 truncate">
+                        {song.artist}
+                      </p>
+                    </div>
+                    <span className="material-symbols-outlined text-neutral-600 group-hover:text-brand-lime transition-colors ml-2">
+                      play_circle
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+        </motion.div>
+      </div>
+    </>
   );
 }
 

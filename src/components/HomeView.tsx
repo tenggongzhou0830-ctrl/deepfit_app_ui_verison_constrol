@@ -59,6 +59,21 @@ export default function HomeView({
     setWeeklyPlan(updated);
   };
 
+  const getWeekDateString = (dayIndex: number) => {
+    const now = new Date();
+    const currentDay = now.getDay(); // 0 is Sunday, 1 is Monday, ...
+    const distance = dayIndex - (currentDay === 0 ? 6 : currentDay - 1);
+    const targetDate = new Date(now.getTime() + distance * 24 * 60 * 60 * 1000);
+    
+    if (distance === 0) {
+      return "今日";
+    }
+    
+    const month = targetDate.getMonth() + 1;
+    const date = targetDate.getDate();
+    return `${month}月${date}日`;
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 15 }}
@@ -126,20 +141,25 @@ export default function HomeView({
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
             <div>
               <h3 className="text-3xl font-display font-black text-brand-text tracking-tight">
-                胸部与三头肌
+                {weeklyPlan[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]?.planText || "胸部与三头肌"}
               </h3>
               <p className="text-brand-text-muted text-sm mt-1">
-                高强度力量训练 • 阻力塑形 • 预计时长 65 分钟
+                {weeklyPlan[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]?.type === "休息"
+                  ? "今日休息 • 放松恢复 • 积蓄能量"
+                  : `系统级${weeklyPlan[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]?.type}特训 • 强效塑形 • 预计时长 ${parseInt(weeklyPlan[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1]?.duration) || 60} 分钟`}
               </p>
             </div>
             <div className="text-right sm:text-right flex sm:flex-col justify-between sm:justify-center items-center sm:items-end w-full sm:w-auto border-t sm:border-t-0 border-white/5 pt-2 sm:pt-0">
               <span className="text-xs text-brand-text-muted font-mono tracking-widest">PROGRESS</span>
-              <span className="text-lg font-display font-extrabold text-brand-lime">Day 1 / 7</span>
+              <span className="text-lg font-display font-extrabold text-brand-lime">Day {new Date().getDay() === 0 ? 7 : new Date().getDay()} / 7</span>
             </div>
           </div>
 
           <div className="w-full bg-brand-black rounded-full h-3.5 mt-2 overflow-hidden border border-white/5 p-[2px]">
-            <div className="bg-gradient-to-r from-brand-lime-dim to-brand-lime h-full rounded-full w-[25%] shadow-[0_0_12px_rgba(195,244,0,0.7)]"></div>
+            <div 
+              className="bg-gradient-to-r from-brand-lime-dim to-brand-lime h-full rounded-full shadow-[0_0_12px_rgba(195,244,0,0.7)]"
+              style={{ width: `${((new Date().getDay() === 0 ? 7 : new Date().getDay()) / 7) * 100}%` }}
+            ></div>
           </div>
 
           <button
@@ -165,7 +185,9 @@ export default function HomeView({
         {/* Horizontal Day Selector */}
         <div className="flex gap-4 overflow-x-auto hide-scrollbar pb-3 snap-x">
           {weeklyPlan.map((day, idx) => {
-            const isToday = idx === 0; // Monday as today
+            const currentDay = new Date().getDay();
+            const todayIdx = currentDay === 0 ? 6 : currentDay - 1;
+            const isToday = idx === todayIdx;
             const isRest = day.type === "休息";
 
             return (
@@ -192,7 +214,7 @@ export default function HomeView({
                     {day.dayName}
                   </span>
                   <h4 className={`text-lg font-display font-bold ${isToday ? "text-brand-lime" : "text-brand-text"}`}>
-                    {day.dateText}
+                    {getWeekDateString(idx)}
                   </h4>
                 </div>
 
